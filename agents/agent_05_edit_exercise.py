@@ -7,11 +7,14 @@ Implement the TODOs to create a file-editing agent.
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 
 def read_file(path: str) -> str:
@@ -86,15 +89,9 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 class Agent:
     """A chat agent that can read, list, run commands, and edit files."""
 
-    def __init__(self, verbose: bool = False):
-        """
-        Initialize the agent.
-
-        Args:
-            verbose: If True, print debug information
-        """
+    def __init__(self):
+        """Initialize the agent."""
         self.client = anthropic.Anthropic()
-        self.verbose = verbose
 
         # TODO: Add the edit_file tool to this list
         # It should have:
@@ -183,8 +180,7 @@ class Agent:
                 conversation.append({"role": "user", "content": user_input})
 
                 while True:
-                    if self.verbose:
-                        print(f"[DEBUG] Sending {len(conversation)} messages")
+                    logger.debug(f"Sending {len(conversation)} messages")
 
                     response = self.client.messages.create(
                         model="claude-sonnet-4-20250514",
@@ -193,8 +189,7 @@ class Agent:
                         tools=self.tools,
                     )
 
-                    if self.verbose:
-                        print(f"[DEBUG] Response stop_reason: {response.stop_reason}")
+                    logger.debug(f"Response stop_reason: {response.stop_reason}")
 
                     conversation.append(
                         {"role": "assistant", "content": response.content}
@@ -210,9 +205,8 @@ class Agent:
 
                     tool_results = []
                     for tool_use in tool_uses:
-                        if self.verbose:
-                            print(f"[DEBUG] Tool call: {tool_use.name}")
-                            print(f"[DEBUG] Tool input: {tool_use.input}")
+                        logger.debug(f"Tool call: {tool_use.name}")
+                        logger.debug(f"Tool input: {tool_use.input}")
 
                         result = self.execute_tool(tool_use.name, tool_use.input)
                         tool_results.append(
@@ -239,7 +233,15 @@ def main():
     )
     args = parser.parse_args()
 
-    agent = Agent(verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="[%(levelname)s] %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("anthropic").setLevel(logging.WARNING)
+
+    agent = Agent()
     agent.run()
 
 

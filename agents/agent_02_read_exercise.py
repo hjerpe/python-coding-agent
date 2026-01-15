@@ -6,9 +6,12 @@ Implement the TODOs to create a file-reading agent.
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 
 def read_file(path: str) -> str:
@@ -24,21 +27,20 @@ def read_file(path: str) -> str:
     # TODO: Implement file reading
     # Hint: Use Path(path).read_text()
     # Hint: Wrap in try/except and return error message on failure
-    pass
+    try:
+        file_path = Path(path)
+        content = file_path.read_text()
+        return content
+    except Exception as e:
+        return f"Error reading file: {e}"
 
 
 class Agent:
     """A chat agent that can read files."""
 
-    def __init__(self, verbose: bool = False):
-        """
-        Initialize the agent.
-
-        Args:
-            verbose: If True, print debug information
-        """
+    def __init__(self):
+        """Initialize the agent."""
         self.client = anthropic.Anthropic()
-        self.verbose = verbose
 
         # TODO: Define the read_file tool
         # Hint: Use the structure:
@@ -51,7 +53,24 @@ class Agent:
         #         "required": [...]
         #     }
         # }
-        self.tools = []  # Replace with tool definition
+        read_file_tool = {
+            "name": "read_file",
+            "description": (
+                "Reads the contents of a given relative file path."
+                " Use this when you need to examine the contents of a file."
+                ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The relative path to the file to read"
+                        }
+                    },
+                "required": ["path"]
+            }
+        }
+        self.tools = [read_file_tool]  # Replace with tool definition
 
     def execute_tool(self, name: str, tool_input: dict) -> str:
         """
@@ -66,7 +85,11 @@ class Agent:
         """
         # TODO: Check if name is "read_file" and call the function
         # Hint: Return f"Unknown tool: {name}" for unknown tools
-        pass
+        if name == "read_file":
+            path = tool_input.get("path", "")
+            return read_file(path)
+        else:
+            return f"Unknown tool: {name}"
 
     def run(self) -> None:
         """Run the main conversation loop."""
@@ -131,7 +154,15 @@ def main():
     )
     args = parser.parse_args()
 
-    agent = Agent(verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="[%(levelname)s] %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("anthropic").setLevel(logging.WARNING)
+
+    agent = Agent()
     agent.run()
 
 

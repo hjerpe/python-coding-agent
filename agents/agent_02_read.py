@@ -6,9 +6,12 @@ A chat agent with the ability to read files from the filesystem.
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 
 def read_file(path: str) -> str:
@@ -30,15 +33,9 @@ def read_file(path: str) -> str:
 class Agent:
     """A chat agent that can read files."""
 
-    def __init__(self, verbose: bool = False):
-        """
-        Initialize the agent.
-
-        Args:
-            verbose: If True, print debug information
-        """
+    def __init__(self):
+        """Initialize the agent."""
         self.client = anthropic.Anthropic()
-        self.verbose = verbose
         self.tools = [
             {
                 "name": "read_file",
@@ -90,8 +87,7 @@ class Agent:
 
                 # Inner loop for tool execution
                 while True:
-                    if self.verbose:
-                        print(f"[DEBUG] Sending {len(conversation)} messages")
+                    logger.debug(f"Sending {len(conversation)} messages")
 
                     # Call the API with tools
                     response = self.client.messages.create(
@@ -101,8 +97,7 @@ class Agent:
                         tools=self.tools,
                     )
 
-                    if self.verbose:
-                        print(f"[DEBUG] Response stop_reason: {response.stop_reason}")
+                    logger.debug(f"Response stop_reason: {response.stop_reason}")
 
                     # Add assistant response to conversation
                     conversation.append(
@@ -122,14 +117,12 @@ class Agent:
                     # Execute tools and collect results
                     tool_results = []
                     for tool_use in tool_uses:
-                        if self.verbose:
-                            print(f"[DEBUG] Tool call: {tool_use.name}")
-                            print(f"[DEBUG] Tool input: {tool_use.input}")
+                        logger.debug(f"Tool call: {tool_use.name}")
+                        logger.debug(f"Tool input: {tool_use.input}")
 
                         result = self.execute_tool(tool_use.name, tool_use.input)
 
-                        if self.verbose:
-                            print(f"[DEBUG] Tool result: {result[:100]}...")
+                        logger.debug(f"Tool result: {result[:100]}...")
 
                         tool_results.append(
                             {
@@ -156,7 +149,15 @@ def main():
     )
     args = parser.parse_args()
 
-    agent = Agent(verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="[%(levelname)s] %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("anthropic").setLevel(logging.WARNING)
+
+    agent = Agent()
     agent.run()
 
 
