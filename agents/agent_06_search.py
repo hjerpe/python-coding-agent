@@ -5,18 +5,173 @@ Code Search Agent - Section 6
 A complete coding agent with file operations, bash commands, editing, and code search.
 """
 
+from __future__ import annotations
 import argparse
 import json
 import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Any, Callable
 
+from pydantic import BaseModel, Field, ValidationError
 import anthropic
 
 logger = logging.getLogger(__name__)
 
 
+# ---------- Tool Registry System ----------
+#
+# This section implements a scalable tool registration system using decorators
+# and Pydantic for input validation. This approach:
+# - Reduces boilerplate when adding new tools
+# - Provides automatic input validation
+# - Centralizes tool definitions
+# - Makes the codebase more maintainable
+
+TOOLS: dict[str, dict[str, Any]] = {}
+
+
+def tool(*, name: str, description: str, input_model: type[BaseModel]):
+    """
+    Decorator to register a function as an LLM tool.
+
+    The wrapped function should accept keyword arguments that match the fields
+    in `input_model`. Example:
+
+        class MyInput(BaseModel):
+            a: int
+            b: str = "default"
+
+        @tool(name="my_tool", description="...", input_model=MyInput)
+        def my_tool(a: int, b: str = "default") -> str:
+            return f"a={a}, b={b}"
+
+    Args:
+        name: The tool name that the LLM will use
+        description: Description of what the tool does
+        input_model: Pydantic model class for validating inputs
+
+    Returns:
+        Decorated function
+    """
+    def deco(fn: Callable[..., str]):
+        TOOLS[name] = {
+            "name": name,
+            "description": description,
+            "model": input_model,
+            "fn": fn,
+        }
+        return fn
+    return deco
+
+
+def anthropic_tools() -> list[dict[str, Any]]:
+    """
+    Convert registered tools to Anthropic's tool format.
+
+    Returns:
+        List of tool definitions in Anthropic's expected format:
+        [{"name": ..., "description": ..., "input_schema": {...}}, ...]
+    """
+    out: list[dict[str, Any]] = []
+    for t in TOOLS.values():
+        schema = t["model"].model_json_schema()
+
+        out.append({
+            "name": t["name"],
+            "description": t["description"],
+            "input_schema": {
+                "type": "object",
+                "properties": schema.get("properties", {}),
+                "required": schema.get("required", []),
+            },
+        })
+    return out
+
+
+def execute_tool(name: str, tool_input: dict[str, Any]) -> str:
+    """
+    Execute a registered tool with input validation.
+
+    Validates tool_input against the tool's Pydantic model,
+    then calls the underlying function with validated kwargs.
+
+    Args:
+        name: The name of the tool to execute
+        tool_input: Dictionary of input parameters
+
+    Returns:
+        The tool's output as a string, or an error message
+    """
+    t = TOOLS.get(name)
+    if not t:
+        return f"Unknown tool: {name}"
+
+    try:
+        parsed = t["model"].model_validate(tool_input)
+    except ValidationError as e:
+        return f"Invalid input for {name}: {e.errors()}"
+
+    # Convert validated model to dict of kwargs for the function
+    kwargs = parsed.model_dump()
+    return t["fn"](**kwargs)
+
+
+# ---------- Pydantic Input Models ----------
+
+class ReadFileInput(BaseModel):
+    """Input schema for the read_file tool."""
+    path: str = Field(description="The relative path of a file to read")
+
+
+class ListFilesInput(BaseModel):
+    """Input schema for the list_files tool."""
+    path: str = Field(
+        default=".",
+        description="The relative path of a directory to list (defaults to current directory)"
+    )
+
+
+class BashInput(BaseModel):
+    """Input schema for the bash tool."""
+    command: str = Field(description="The bash command to execute")
+
+
+class EditFileInput(BaseModel):
+    """Input schema for the edit_file tool."""
+    path: str = Field(description="The path to the file to edit")
+    old_str: str = Field(
+        description="The text to search for and replace (must match exactly once). Use empty string to create new file or append."
+    )
+    new_str: str = Field(description="The text to replace old_str with")
+
+
+class CodeSearchInput(BaseModel):
+    """Input schema for the code_search tool."""
+    pattern: str = Field(description="The search pattern or regex to find in files")
+    path: str = Field(
+        default=".",
+        description="The path to search in (defaults to current directory)"
+    )
+    file_type: str | None = Field(
+        default=None,
+        description="Optional file type filter (e.g., 'py', 'js', 'go', 'ts')"
+    )
+    case_sensitive: bool = Field(
+        default=False,
+        description="Whether the search should be case-sensitive (defaults to false)"
+    )
+
+
+# ---------- Tool Implementations ----------
+
+
+@tool(
+    name="read_file",
+    description="Read the contents of a given relative file path. Use this when you need to examine the contents of an existing file.",
+    input_model=ReadFileInput,
+)
 def read_file(path: str) -> str:
     """
     Read and return the contents of a file.
@@ -33,6 +188,11 @@ def read_file(path: str) -> str:
         return f"Error reading file: {e}"
 
 
+@tool(
+    name="list_files",
+    description="List files and directories at a given path. If no path is provided, lists files in the current directory. Returns a JSON array of file and directory names (directories end with /).",
+    input_model=ListFilesInput,
+)
 def list_files(path: str = ".") -> str:
     """
     List all files and directories at the given path recursively.
@@ -63,6 +223,11 @@ def list_files(path: str = ".") -> str:
         return f"Error listing files: {e}"
 
 
+@tool(
+    name="bash",
+    description="Execute a bash command and return its output. Use this for running shell commands, scripts, or system utilities.",
+    input_model=BashInput,
+)
 def bash(command: str) -> str:
     """
     Execute a bash command and return the output.
@@ -91,6 +256,11 @@ def bash(command: str) -> str:
         return f"Error executing command: {e}"
 
 
+@tool(
+    name="edit_file",
+    description="Make edits to a text file by replacing 'old_str' with 'new_str'. The old_str must match exactly once in the file. For creating new files or appending, use an empty old_str.",
+    input_model=EditFileInput,
+)
 def edit_file(path: str, old_str: str, new_str: str) -> str:
     """
     Edit a file by replacing old_str with new_str.
@@ -148,6 +318,11 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
         return f"Error writing file: {e}"
 
 
+@tool(
+    name="code_search",
+    description="Search for code patterns using ripgrep (rg). Returns matching lines with file names and line numbers. Supports regex patterns.",
+    input_model=CodeSearchInput,
+)
 def code_search(
     pattern: str,
     path: str = ".",
@@ -220,100 +395,10 @@ class Agent:
     """A complete coding agent with all tools."""
 
     def __init__(self):
-        """Initialize the agent."""
+        """Initialize the agent with registered tools."""
         self.client = anthropic.Anthropic()
-        self.tools = [
-            {
-                "name": "read_file",
-                "description": "Read the contents of a given relative file path. Use this when you need to examine the contents of an existing file.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The relative path of a file to read",
-                        }
-                    },
-                    "required": ["path"],
-                },
-            },
-            {
-                "name": "list_files",
-                "description": "List files and directories at a given path. If no path is provided, lists files in the current directory. Returns a JSON array of file and directory names (directories end with /).",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Optional relative path to list. Defaults to current directory if not provided.",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-            {
-                "name": "bash",
-                "description": "Execute a bash command and return its output. Use this for running shell commands, scripts, or system utilities.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The bash command to execute",
-                        }
-                    },
-                    "required": ["command"],
-                },
-            },
-            {
-                "name": "edit_file",
-                "description": "Make edits to a text file by replacing 'old_str' with 'new_str'. The old_str must match exactly once in the file. For creating new files or appending, use an empty old_str.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The path to the file to edit",
-                        },
-                        "old_str": {
-                            "type": "string",
-                            "description": "The text to search for and replace (must match exactly once). Use empty string to create new file or append.",
-                        },
-                        "new_str": {
-                            "type": "string",
-                            "description": "The text to replace old_str with",
-                        },
-                    },
-                    "required": ["path", "old_str", "new_str"],
-                },
-            },
-            {
-                "name": "code_search",
-                "description": "Search for code patterns using ripgrep (rg). Returns matching lines with file names and line numbers. Supports regex patterns.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "The search pattern or regex to find in files",
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Optional path to search in. Defaults to current directory.",
-                        },
-                        "file_type": {
-                            "type": "string",
-                            "description": "Optional file type filter (e.g., 'py', 'js', 'go', 'ts')",
-                        },
-                        "case_sensitive": {
-                            "type": "boolean",
-                            "description": "Whether the search should be case-sensitive. Defaults to false.",
-                        },
-                    },
-                    "required": ["pattern"],
-                },
-            },
-        ]
+        # Use the decorator-based tool registry
+        self.tools = anthropic_tools()
 
     def execute_tool(self, name: str, tool_input: dict) -> str:
         """
@@ -326,29 +411,9 @@ class Agent:
         Returns:
             The tool's output as a string
         """
-        if name == "read_file":
-            return read_file(tool_input["path"])
-        elif name == "list_files":
-            path = tool_input.get("path", ".")
-            return list_files(path)
-        elif name == "bash":
-            command = tool_input["command"]
-            logger.debug(f"Executing command: {command}")
-            return bash(command)
-        elif name == "edit_file":
-            return edit_file(
-                tool_input["path"],
-                tool_input["old_str"],
-                tool_input["new_str"],
-            )
-        elif name == "code_search":
-            return code_search(
-                tool_input["pattern"],
-                tool_input.get("path", "."),
-                tool_input.get("file_type"),
-                tool_input.get("case_sensitive", False),
-            )
-        return f"Unknown tool: {name}"
+        # Delegate to the module-level execute_tool function
+        # which handles validation and dispatching
+        return execute_tool(name, tool_input)
 
     def run(self) -> None:
         """Run the main conversation loop."""

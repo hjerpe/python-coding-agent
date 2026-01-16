@@ -69,111 +69,130 @@ path.write_text(content)
 
 ---
 
-## Implementation Outline
+## Using the Decorator Pattern
 
-### Step 1: Add the Edit File Tool Definition
+This tutorial continues using the decorator-based tool registration system from Section 3. If you need a refresher on how `@tool`, Pydantic models, and the registry system work, review the "Scalable Tool Registration with Decorators" section in TUTORIAL_04_bash.md or TUTORIAL_03_list_files.md (starting at line 92).
 
-Add the edit tool with three parameters:
+**Key point:** The exercise file has all infrastructure pre-written. Your job is to implement the `edit_file()` function body only.
+
+---
+
+## What You'll Do
+
+In this exercise, you'll implement the `edit_file()` tool to modify files programmatically:
+
+1. **Implement string-replacement file editing** (old_str → new_str)
+2. **Handle edge cases:** file creation, appending, ambiguous matches
+3. **Validate inputs** and provide clear error messages
+4. **Test your agent** by editing files through Claude
+
+**Note:** The decorator infrastructure (`@tool`, Pydantic models, Agent class) is already complete. You only need to implement the function body marked with `TODO`.
+
+---
+
+## Exercise Instructions
+
+### Step 1: Review What's Already Done
+
+Open `agent_05_edit_exercise.py` and observe:
+
+1. **Tool Registry System** (lines 26-93): Complete decorator infrastructure
+2. **Pydantic Models** (lines 96-122): Includes `EditFileInput` with all three fields
+3. **Completed Tools** (lines 127-178): `read_file`, `list_files`, `bash` all implemented
+4. **TODO Tool** (lines 181-216): The `edit_file()` function needs implementation
+
+The `edit_file` function already has its decorator:
 
 ```python
-{
-    "name": "edit_file",
-    "description": "Make edits to a text file. Replaces 'old_str' with 'new_str' in the file. For creating new files, use empty old_str.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "The path to the file to edit"
-            },
-            "old_str": {
-                "type": "string",
-                "description": "The text to search for (must match exactly once). Use empty string for new files."
-            },
-            "new_str": {
-                "type": "string",
-                "description": "The text to replace old_str with"
-            }
-        },
-        "required": ["path", "old_str", "new_str"]
-    }
-}
-```
-
-### Step 2: Implement Basic Validation
-
-Start with input validation:
-
-```python
+@tool(
+    name="edit_file",
+    description="Make edits to a text file by replacing 'old_str'...",
+    input_model=EditFileInput,
+)
 def edit_file(path: str, old_str: str, new_str: str) -> str:
-    # Validate inputs
-    if not path:
-        return "Error: path cannot be empty"
-
-    if old_str == new_str:
-        return "Error: old_str and new_str cannot be identical"
-
-    file_path = Path(path)
-    # ... rest of implementation
+    # TODO: Your implementation here
+    pass
 ```
 
-**Pitfall**: Don't forget the no-op check (old_str == new_str)!
+### Step 2: Implement edit_file()
 
-### Step 3: Handle New File Creation
+**Signature:** `def edit_file(path: str, old_str: str, new_str: str) -> str:`
 
-Check for the special case of empty old_str:
+**Requirements:**
 
+1. **Input Validation:**
+   - If `path` is empty, return `"Error: path cannot be empty"`
+   - If `old_str == new_str`, return `"Error: old_str and new_str cannot be identical"`
+
+2. **New File Creation (when old_str is empty):**
+   - If file doesn't exist: create it with `new_str` as content
+     - Use `file_path.parent.mkdir(parents=True, exist_ok=True)` to create directories
+     - Return `f"Created new file: {path}"`
+   - If file exists: append `new_str` to existing content
+     - Return `f"Appended to file: {path}"`
+
+3. **Normal Edit (when old_str is not empty):**
+   - Read file content
+   - Count occurrences of `old_str`:
+     - If `count == 0`: return error with preview of what wasn't found
+     - If `count > 1`: return error saying "found X times, need exactly 1 match"
+     - If `count == 1`: perform replacement
+   - Use `content.replace(old_str, new_str, 1)` to replace only first match
+   - Write back to file
+   - Return `f"Successfully edited {path}"`
+
+4. **Error Handling:**
+   - Wrap file operations in try/except blocks
+   - Return descriptive error messages
+
+**Implementation hints:**
 ```python
-if old_str == "":
-    if not file_path.exists():
-        # Create new file with parent directories
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(new_str)
-        return f"Created new file: {path}"
-    else:
-        # Append to existing file
-        existing = file_path.read_text()
-        file_path.write_text(existing + new_str)
-        return f"Appended to file: {path}"
-```
+file_path = Path(path)
 
-### Step 4: Implement Find-and-Replace
-
-For normal edits, validate and replace:
-
-```python
-try:
-    content = file_path.read_text()
-except FileNotFoundError:
-    return f"Error: file not found: {path}"
-
-# Check for exactly one match
+# For counting matches
 count = content.count(old_str)
-if count == 0:
-    return f"Error: '{old_str[:50]}...' not found in {path}"
-if count > 1:
-    return f"Error: '{old_str[:50]}...' found {count} times, need exactly 1 match"
 
-# Perform the replacement
-new_content = content.replace(old_str, new_str, 1)
-file_path.write_text(new_content)
-return f"Successfully edited {path}"
+# For previews in error messages
+preview = old_str[:50] + "..." if len(old_str) > 50 else old_str
 ```
 
-**Tip**: Truncate long strings in error messages for readability.
+### Step 3: Test Your Implementation
 
-### Step 5: Update the Tool Dispatcher
+Run the agent:
 
-Add the edit_file case:
-
-```python
-elif name == "edit_file":
-    return edit_file(
-        tool_input["path"],
-        tool_input["old_str"],
-        tool_input["new_str"]
-    )
+```bash
+python agent_05_edit_exercise.py --verbose
 ```
+
+**Test cases:**
+
+1. **Create new file:**
+   ```
+   You: Create a new file called test.txt with content "Hello World"
+   Expected: File created successfully
+   ```
+
+2. **Edit existing content:**
+   ```
+   You: In test.txt, replace "World" with "Universe"
+   Expected: Successfully edited test.txt
+   ```
+
+3. **Handle ambiguous matches:**
+   ```
+   You: In a file with duplicate "foo", replace "foo" with "bar"
+   Expected: Error about multiple matches, needs more context
+   ```
+
+4. **Append to file:**
+   ```
+   You: Add a new line to test.txt with content "\nGoodbye"
+   Expected: Appended to file
+   ```
+
+### Step 4: Compare with Solution
+
+Check `agent_05_edit.py` to see the complete implementation. Notice how the decorator pattern kept your focus on business logic rather than plumbing.
 
 ---
 

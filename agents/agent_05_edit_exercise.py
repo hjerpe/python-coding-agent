@@ -3,20 +3,132 @@
 Edit File Agent - Section 5 (Exercise)
 
 Implement the TODOs to create a file-editing agent.
+
+This version uses a decorator-based tool registration system with Pydantic
+for input validation. This approach scales better as you add more tools.
 """
 
+from __future__ import annotations
 import argparse
 import json
 import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Any, Callable
 
+from pydantic import BaseModel, Field, ValidationError
 import anthropic
 
 logger = logging.getLogger(__name__)
 
 
+# ---------- Tool Registry System ----------
+
+TOOLS: dict[str, dict[str, Any]] = {}
+
+
+def tool(*, name: str, description: str, input_model: type[BaseModel]):
+    """
+    Decorator to register a function as an LLM tool.
+
+    Args:
+        name: The tool name that the LLM will use
+        description: Description of what the tool does
+        input_model: Pydantic model class for validating inputs
+
+    Returns:
+        Decorated function
+    """
+    def deco(fn: Callable[..., str]):
+        TOOLS[name] = {
+            "name": name,
+            "description": description,
+            "model": input_model,
+            "fn": fn,
+        }
+        return fn
+    return deco
+
+
+def anthropic_tools() -> list[dict[str, Any]]:
+    """Convert registered tools to Anthropic's tool format."""
+    out: list[dict[str, Any]] = []
+    for t in TOOLS.values():
+        schema = t["model"].model_json_schema()
+
+        out.append({
+            "name": t["name"],
+            "description": t["description"],
+            "input_schema": {
+                "type": "object",
+                "properties": schema.get("properties", {}),
+                "required": schema.get("required", []),
+            },
+        })
+    return out
+
+
+def execute_tool(name: str, tool_input: dict[str, Any]) -> str:
+    """
+    Execute a registered tool with input validation.
+
+    Args:
+        name: The name of the tool to execute
+        tool_input: Dictionary of input parameters
+
+    Returns:
+        The tool's output as a string, or an error message
+    """
+    t = TOOLS.get(name)
+    if not t:
+        return f"Unknown tool: {name}"
+
+    try:
+        parsed = t["model"].model_validate(tool_input)
+    except ValidationError as e:
+        return f"Invalid input for {name}: {e.errors()}"
+
+    kwargs = parsed.model_dump()
+    return t["fn"](**kwargs)
+
+
+# ---------- Pydantic Input Models ----------
+
+class ReadFileInput(BaseModel):
+    """Input schema for the read_file tool."""
+    path: str = Field(description="The relative path of a file to read")
+
+
+class ListFilesInput(BaseModel):
+    """Input schema for the list_files tool."""
+    path: str = Field(
+        default=".",
+        description="The relative path of a directory to list (defaults to current directory)"
+    )
+
+
+class BashInput(BaseModel):
+    """Input schema for the bash tool."""
+    command: str = Field(description="The bash command to execute")
+
+
+class EditFileInput(BaseModel):
+    """Input schema for the edit_file tool."""
+    path: str = Field(description="The path to the file to edit")
+    old_str: str = Field(
+        description="The text to search for and replace (must match exactly once). Use empty string to create new file or append."
+    )
+    new_str: str = Field(description="The text to replace old_str with")
+
+
+# ---------- Tool Implementations ----------
+
+@tool(
+    name="read_file",
+    description="Read the contents of a given relative file path. Use this when you need to examine the contents of an existing file.",
+    input_model=ReadFileInput,
+)
 def read_file(path: str) -> str:
     """Read and return the contents of a file."""
     try:
@@ -25,6 +137,11 @@ def read_file(path: str) -> str:
         return f"Error reading file: {e}"
 
 
+@tool(
+    name="list_files",
+    description="List files and directories at a given path. If no path is provided, lists files in the current directory. Returns a JSON array of file and directory names (directories end with /).",
+    input_model=ListFilesInput,
+)
 def list_files(path: str = ".") -> str:
     """List all files and directories at the given path recursively."""
     try:
@@ -44,6 +161,11 @@ def list_files(path: str = ".") -> str:
         return f"Error listing files: {e}"
 
 
+@tool(
+    name="bash",
+    description="Execute a bash command and return its output. Use this for running shell commands, scripts, or system utilities.",
+    input_model=BashInput,
+)
 def bash(command: str) -> str:
     """Execute a bash command and return the output."""
     try:
@@ -56,6 +178,11 @@ def bash(command: str) -> str:
         return f"Error executing command: {e}"
 
 
+@tool(
+    name="edit_file",
+    description="Make edits to a text file by replacing 'old_str' with 'new_str'. The old_str must match exactly once in the file. For creating new files or appending, use an empty old_str.",
+    input_model=EditFileInput,
+)
 def edit_file(path: str, old_str: str, new_str: str) -> str:
     """
     Edit a file by replacing old_str with new_str.
@@ -72,17 +199,20 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     # Steps:
     # 1. Validate inputs (path not empty, old_str != new_str)
     # 2. If old_str is empty:
-    #    - If file doesn't exist: create with new_str content
+    #    - If file doesn't exist: create with new_str content (use file_path.parent.mkdir(parents=True, exist_ok=True))
     #    - If file exists: append new_str
     # 3. For normal edits:
     #    - Read file content
     #    - Count occurrences of old_str (must be exactly 1)
+    #    - If count == 0: return error "not found"
+    #    - If count > 1: return error "found X times, need exactly 1 match"
     #    - Replace and write back
+    # 4. Wrap all in try/except blocks
     #
     # Hints:
-    # - file_path.parent.mkdir(parents=True, exist_ok=True)
-    # - content.count(old_str) to count occurrences
-    # - content.replace(old_str, new_str, 1) to replace first occurrence
+    # - file_path = Path(path)
+    # - content.count(old_str)
+    # - content.replace(old_str, new_str, 1)
     pass
 
 
@@ -90,59 +220,11 @@ class Agent:
     """A chat agent that can read, list, run commands, and edit files."""
 
     def __init__(self):
-        """Initialize the agent."""
+        """Initialize the agent with registered tools."""
         self.client = anthropic.Anthropic()
-
-        # TODO: Add the edit_file tool to this list
-        # It should have:
-        # - name: "edit_file"
-        # - description: explain find-and-replace behavior
-        # - input_schema with "path", "old_str", "new_str" (all required)
-        self.tools = [
-            {
-                "name": "read_file",
-                "description": "Read the contents of a given relative file path.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The relative path of a file to read",
-                        }
-                    },
-                    "required": ["path"],
-                },
-            },
-            {
-                "name": "list_files",
-                "description": "List files and directories at a given path.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Optional path to list. Defaults to current directory.",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-            {
-                "name": "bash",
-                "description": "Execute a bash command and return its output.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The bash command to execute",
-                        }
-                    },
-                    "required": ["command"],
-                },
-            },
-            # TODO: Add edit_file tool definition here
-        ]
+        # Use the decorator-based tool registry
+        # This automatically includes all tools registered with @tool decorator
+        self.tools = anthropic_tools()
 
     def execute_tool(self, name: str, tool_input: dict) -> str:
         """
@@ -155,14 +237,9 @@ class Agent:
         Returns:
             The tool's output as a string
         """
-        if name == "read_file":
-            return read_file(tool_input["path"])
-        elif name == "list_files":
-            return list_files(tool_input.get("path", "."))
-        elif name == "bash":
-            return bash(tool_input["command"])
-        # TODO: Add handling for "edit_file"
-        return f"Unknown tool: {name}"
+        # Delegate to the module-level execute_tool function
+        # which handles validation and dispatching
+        return execute_tool(name, tool_input)
 
     def run(self) -> None:
         """Run the main conversation loop."""

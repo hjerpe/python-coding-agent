@@ -69,114 +69,199 @@ return output
 
 ---
 
-## Implementation Outline
+## Architecture Note: Decorator Pattern
 
-### Step 1: Add the Code Search Tool Definition
+This is the final tutorial in the series, and it uses the same decorator-based architecture as Sections 3-5. All infrastructure is pre-written in the exercise file - you only implement the `code_search()` function body.
 
-Define the tool with optional parameters:
+If you've completed the previous exercises, you're now familiar with this pattern:
+1. Pydantic model defines inputs
+2. `@tool` decorator registers the function
+3. Implementation focuses on core logic only
 
-```python
-{
-    "name": "code_search",
-    "description": "Search for code patterns using ripgrep (rg). Returns matching lines with file names and line numbers.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "The search pattern or regex"
-            },
-            "path": {
-                "type": "string",
-                "description": "Optional path to search in. Defaults to current directory."
-            },
-            "file_type": {
-                "type": "string",
-                "description": "Optional file type filter (e.g., 'py', 'js', 'go')"
-            },
-            "case_sensitive": {
-                "type": "boolean",
-                "description": "Whether search is case-sensitive. Defaults to false."
-            }
-        },
-        "required": ["pattern"]
-    }
-}
-```
+For a complete explanation of this architecture, see TUTORIAL_03_list_files.md (line 92+) or TUTORIAL_04_bash.md.
 
-### Step 2: Build the Command Arguments
+---
 
-Create a function that builds ripgrep arguments:
+## What You'll Do
 
-```python
-def code_search(pattern: str, path: str = ".", file_type: str = None, case_sensitive: bool = False) -> str:
-    args = ["rg", "--line-number", "--with-filename", "--color=never"]
+In this final exercise, you'll implement the `code_search()` tool using ripgrep:
 
-    if not case_sensitive:
-        args.append("--ignore-case")
+1. **Build ripgrep commands** with dynamic arguments (case sensitivity, file types)
+2. **Parse ripgrep output** and handle exit codes
+3. **Limit results** to prevent overwhelming responses
+4. **Test your complete coding agent** with all 5 tools working together
 
-    if file_type:
-        args.extend(["--type", file_type])
+**Note:** All decorator infrastructure is pre-written. You only implement the TODO'd function body.
 
-    args.append(pattern)
-    args.append(path)
-```
+---
 
-**Why these flags**:
-- `--line-number`: Show line numbers for each match
-- `--with-filename`: Always show filename (even for single file)
-- `--color=never`: Plain output (no ANSI codes)
-- `--ignore-case`: Case-insensitive by default (friendlier)
+## Exercise Instructions
 
-### Step 3: Execute and Handle Exit Codes
+### Step 1: Review the Complete Architecture
 
-Run the command and handle ripgrep's exit codes:
+Open `agent_06_search_exercise.py` and observe the full structure:
+
+1. **Tool Registry System** (lines 26-93): Decorator infrastructure
+2. **Pydantic Models** (lines 96-139): Five models including `CodeSearchInput` with all fields
+3. **Completed Tools** (lines 144-246): `read_file`, `list_files`, `bash`, and `edit_file` all working
+4. **TODO Tool** (lines 249-292): The `code_search()` function needs implementation
+
+The function already has its decorator:
 
 ```python
-result = subprocess.run(args, capture_output=True, text=True)
-
-# Exit code 1 means no matches (not an error)
-if result.returncode == 1:
-    return "No matches found"
-
-# Other non-zero codes are real errors
-if result.returncode != 0:
-    return f"Search error: {result.stderr}"
-
-output = result.stdout.strip()
+@tool(
+    name="code_search",
+    description="Search for code patterns using ripgrep...",
+    input_model=CodeSearchInput,
+)
+def code_search(
+    pattern: str,
+    path: str = ".",
+    file_type: str | None = None,
+    case_sensitive: bool = False,
+) -> str:
+    # TODO: Your implementation here
+    pass
 ```
 
-**Pitfall**: Don't treat exit code 1 as an error!
+### Step 2: Implement code_search()
 
-### Step 4: Implement Output Limiting
-
-Prevent overwhelming Claude with too many matches:
-
+**Signature:**
 ```python
-MAX_MATCHES = 50
-
-if output:
-    lines = output.split("\n")
-    if len(lines) > MAX_MATCHES:
-        truncated = lines[:MAX_MATCHES]
-        return "\n".join(truncated) + f"\n\n... (showing first {MAX_MATCHES} of {len(lines)} matches)"
-
-return output if output else "No matches found"
+def code_search(
+    pattern: str,
+    path: str = ".",
+    file_type: str | None = None,
+    case_sensitive: bool = False
+) -> str:
 ```
 
-### Step 5: Update the Tool Dispatcher
+**Requirements:**
 
-Add the code_search case:
+1. **Input Validation:**
+   - If `pattern` is empty, return `"Error: pattern cannot be empty"`
 
-```python
-elif name == "code_search":
-    return code_search(
-        tool_input["pattern"],
-        tool_input.get("path", "."),
-        tool_input.get("file_type"),
-        tool_input.get("case_sensitive", False),
-    )
+2. **Build ripgrep command:**
+   ```python
+   args = ["rg", "--line-number", "--with-filename", "--color=never"]
+
+   if not case_sensitive:
+       args.append("--ignore-case")
+
+   if file_type:
+       args.extend(["--type", file_type])
+
+   args.append(pattern)
+   args.append(path)
+   ```
+
+3. **Execute and handle results:**
+   ```python
+   result = subprocess.run(args, capture_output=True, text=True)
+
+   # Exit code 1 means no matches (not an error)
+   if result.returncode == 1:
+       return "No matches found"
+
+   # Other non-zero codes are errors
+   if result.returncode != 0:
+       return f"Search error: {result.stderr}"
+   ```
+
+4. **Limit output:**
+   ```python
+   MAX_MATCHES = 50
+   lines = output.split("\n")
+
+   if len(lines) > MAX_MATCHES:
+       truncated = lines[:MAX_MATCHES]
+       return "\n".join(truncated) + f"\n\n... (showing first {MAX_MATCHES} of {len(lines)} matches)"
+   ```
+
+5. **Handle missing ripgrep:**
+   ```python
+   except FileNotFoundError:
+       return "Error: ripgrep (rg) is not installed. Install it with: brew install ripgrep"
+   ```
+
+### Step 3: Test Your Complete Agent
+
+Run the agent:
+
+```bash
+python agent_06_search_exercise.py --verbose
 ```
+
+**Test cases demonstrating all 5 tools:**
+
+1. **Search for pattern:**
+   ```
+   You: Search for the word "Agent" in Python files
+   Expected: Shows matches with line numbers
+   ```
+
+2. **Read file from search results:**
+   ```
+   You: Read the file agent_03_list_files.py
+   Expected: Shows full file content
+   ```
+
+3. **Edit code based on search:**
+   ```
+   You: In test_file.py, replace "old_function" with "new_function"
+   Expected: Performs edit
+   ```
+
+4. **Verify with bash:**
+   ```
+   You: Run "git diff test_file.py" to see the changes
+   Expected: Shows git diff output
+   ```
+
+5. **List directory structure:**
+   ```
+   You: List all files in the tutorial_materials directory
+   Expected: Shows directory tree
+   ```
+
+### Step 4: Reflect on the Architecture
+
+You've now built a complete coding agent with 5 tools:
+- `read_file`
+- `list_files`
+- `bash`
+- `edit_file`
+- `code_search`
+
+Thanks to the decorator pattern:
+- Each tool required only **one function** + **one Pydantic model**
+- No manual tool registration
+- No execute_tool() if/elif chains
+- Automatic input validation
+
+Compare this to what it would look like with manual registration - you'd have:
+- 5 tool definitions in `self.tools` list (~100 lines of JSON schema)
+- 5 branches in `execute_tool()` if/elif chain (~25 lines)
+- Manual input validation in each branch (~50 lines)
+- Total: ~175 lines of boilerplate
+
+With decorators: **0 lines of boilerplate**. All infrastructure is reusable.
+
+### Next Steps
+
+You now have all the foundational skills to build powerful AI agents:
+
+1. **Tool-based architectures:** Giving LLMs structured capabilities
+2. **Agentic loops:** Iterating until task completion
+3. **State management:** Maintaining conversation context
+4. **Error handling:** Graceful failures and recovery
+5. **Scalable patterns:** Decorator-based tool registration
+
+**Extensions to try:**
+- Add more tools (git operations, API calls, data processing)
+- Implement tool chaining (output of one tool → input of another)
+- Add conversation memory/summarization for long sessions
+- Build specialized agents (code reviewer, test generator, doc writer)
 
 ---
 

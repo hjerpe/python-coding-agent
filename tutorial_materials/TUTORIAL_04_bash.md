@@ -78,94 +78,210 @@ Running arbitrary shell commands is powerful but potentially dangerous:
 
 ---
 
-## Implementation Outline
+## Scalable Tool Registration with Decorators
 
-### Step 1: Add the Bash Tool Definition
+In Section 3, we introduced a decorator-based tool registration system that eliminates boilerplate when adding new tools. **All subsequent sections (4-6) use this pattern**, so let's recap how it works.
 
-Add the bash tool to your tools list:
+### The Old Way (Manual)
+
+Previously, adding a tool required three steps:
 
 ```python
-{
-    "name": "bash",
-    "description": "Execute a bash command and return its output. Use for running shell commands, scripts, or system utilities.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "command": {
-                "type": "string",
-                "description": "The bash command to execute"
-            }
-        },
-        "required": ["command"]
+# Step 1: Write the function
+def bash(command: str) -> str:
+    return subprocess.run(command, shell=True, ...).stdout
+
+# Step 2: Add tool definition to self.tools list
+self.tools = [
+    {
+        "name": "bash",
+        "description": "Execute a bash command...",
+        "input_schema": {
+            "type": "object",
+            "properties": {"command": {"type": "string", ...}},
+            "required": ["command"]
+        }
     }
-}
+]
+
+# Step 3: Add dispatch logic to execute_tool()
+def execute_tool(self, name, tool_input):
+    if name == "bash":
+        return bash(tool_input["command"])
 ```
 
-**Why**: A clear description helps Claude know when bash is appropriate vs other tools.
+This approach doesn't scale - each tool requires changes in 3 separate places.
 
-### Step 2: Implement the Bash Function
+### The New Way (Decorators + Pydantic)
 
-Create a function using `subprocess.run()`:
+With the decorator pattern, adding a tool requires only:
 
 ```python
-import subprocess
+# 1. Define Pydantic input model
+class BashInput(BaseModel):
+    command: str = Field(description="The bash command to execute")
 
+# 2. Decorate the function
+@tool(
+    name="bash",
+    description="Execute a bash command and return its output...",
+    input_model=BashInput,
+)
 def bash(command: str) -> str:
     """Execute a bash command and return the output."""
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        # Combine stdout and stderr
-        output = result.stdout + result.stderr
-
-        if result.returncode != 0:
-            return f"Command failed (exit {result.returncode}):\n{output}"
-
-        return output.strip() if output else "(no output)"
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        # ... implementation
     except Exception as e:
         return f"Error executing command: {e}"
 ```
 
-**Pitfall**: Don't forget to strip whitespace from output!
+**That's it!** The decorator automatically:
+- Registers the tool in the global `TOOLS` registry
+- The `anthropic_tools()` function converts it to Anthropic format
+- The `execute_tool()` function validates inputs and dispatches correctly
 
-### Step 3: Update the Tool Dispatcher
+### Benefits
 
-Add the bash case to `execute_tool()`:
+1. **Less Boilerplate:** One decorator vs. three manual steps
+2. **Type Safety:** Pydantic validates inputs automatically
+3. **Co-location:** Tool definition lives next to implementation
+4. **Consistency:** Same pattern for all tools
 
-```python
-def execute_tool(self, name: str, tool_input: dict) -> str:
-    if name == "read_file":
-        return read_file(tool_input["path"])
-    elif name == "list_files":
-        return list_files(tool_input.get("path", "."))
-    elif name == "bash":
-        return bash(tool_input["command"])
-    return f"Unknown tool: {name}"
-```
+### Infrastructure Already Provided
 
-### Step 4: Add Command Logging
-
-Log commands when verbose mode is enabled:
+In the exercise file, you'll see this infrastructure is **already written** for you:
 
 ```python
-def bash(command: str, verbose: bool = False) -> str:
-    if verbose:
-        print(f"[DEBUG] Executing: {command}")
-    # ... rest of function
+# ---------- Tool Registry System ----------
+TOOLS: dict[str, dict[str, Any]] = {}
+
+def tool(*, name: str, description: str, input_model: type[BaseModel]):
+    """Decorator to register a function as an LLM tool."""
+    # ... (already implemented)
+
+def anthropic_tools() -> list[dict[str, Any]]:
+    """Convert registered tools to Anthropic's tool format."""
+    # ... (already implemented)
+
+def execute_tool(name: str, tool_input: dict[str, Any]) -> str:
+    """Execute a registered tool with input validation."""
+    # ... (already implemented)
 ```
 
-**Why**: Seeing what commands are executed helps debugging and security review.
+And the Agent class is simplified:
 
-### Step 5: Handle Edge Cases
+```python
+class Agent:
+    def __init__(self):
+        self.client = anthropic.Anthropic()
+        # Just use the registry - no manual tool definitions!
+        self.tools = anthropic_tools()
 
-Consider what to return for:
-- Empty output: Return "(no output)" instead of empty string
-- Non-zero exit codes: Include the exit code and error message
-- Exceptions: Return the error message as a string
+    def execute_tool(self, name: str, tool_input: dict) -> str:
+        # Just delegate - no if/elif chain!
+        return execute_tool(name, tool_input)
+```
+
+**Your job:** Implement the tool function body. The infrastructure handles the rest.
+
+---
+
+## What You'll Do
+
+In this exercise, you'll implement the `bash()` tool function to execute shell commands:
+
+1. **Implement bash command execution** using `subprocess.run()`
+2. **Handle command output** (stdout/stderr) and exit codes
+3. **Test your agent** by running shell commands through Claude
+
+**Note:** The decorator infrastructure, Pydantic models, and Agent class are already complete. You only need to implement the tool function body marked with `TODO`.
+
+---
+
+## Exercise Instructions
+
+### Step 1: Review the Decorator Infrastructure
+
+Open `agent_04_bash_exercise.py` and observe:
+
+1. **Tool Registry System** (lines 26-93): Already implemented
+2. **Pydantic Models** (lines 96-113): `ReadFileInput`, `ListFilesInput`, `BashInput` - all defined
+3. **Completed Tools** (lines 118-152): `read_file` and `list_files` with `@tool` decorators
+4. **TODO Tool** (lines 155-182): The `bash()` function needs implementation
+
+### Step 2: Implement the bash() Function
+
+Find the `bash()` function around line 160. It already has the `@tool` decorator applied:
+
+```python
+@tool(
+    name="bash",
+    description="Execute a bash command and return its output...",
+    input_model=BashInput,
+)
+def bash(command: str) -> str:
+    """Execute a bash command and return the output."""
+    # TODO: Your implementation here
+    pass
+```
+
+**Your task:** Replace the `pass` statement with the implementation.
+
+**Requirements:**
+1. Use `subprocess.run()` with `shell=True`, `capture_output=True`, `text=True`
+2. Combine stdout and stderr into a single output string
+3. Check `result.returncode`:
+   - If non-zero: return `f"Command failed (exit {result.returncode}):\n{output}"`
+   - If zero and output exists: return stripped output
+   - If zero and no output: return `"(no output)"`
+4. Wrap everything in a try/except block, return error message on exception
+
+**Hints:**
+```python
+result = subprocess.run(command, shell=True, capture_output=True, text=True)
+output = result.stdout + result.stderr
+```
+
+### Step 3: Test Your Implementation
+
+Run the agent:
+
+```bash
+cd /path/to/agents
+python agent_04_bash_exercise.py --verbose
+```
+
+**Test cases:**
+
+1. **Basic command:**
+   ```
+   You: Run the command "echo hello world"
+   Expected: Should return "hello world"
+   ```
+
+2. **Command with exit code:**
+   ```
+   You: Run "ls /nonexistent"
+   Expected: Should return error with exit code
+   ```
+
+3. **File operations:**
+   ```
+   You: List all Python files in the current directory
+   Expected: Should use bash with "ls *.py"
+   ```
+
+### Step 4: Understand What You Didn't Have to Do
+
+Compare your exercise file to the solution file (`agent_04_bash.py`). Notice you didn't need to:
+
+- Add tool definition to `self.tools` list
+- Update `execute_tool()` if/elif chain
+- Write JSON schema manually
+- Handle input validation
+
+The decorator system handled all of this automatically!
 
 ---
 
