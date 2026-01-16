@@ -89,6 +89,240 @@ def list_files(path: str) -> str:
 
 ---
 
+## Scalable Tool Registration System (Decorator Pattern)
+
+As your agent grows to support more tools (3+), manually defining tool schemas becomes repetitive and error-prone. The complete agent file includes a decorator-based registration system that makes adding tools much cleaner. **This system is already implemented in `agent_03_list_files.py`** - you don't need to build it yourself, but understanding how it works will help you extend the agent with new tools.
+
+### Why the Manual Approach Doesn't Scale
+
+Consider adding a third tool with the manual approach:
+
+```python
+# Manual approach - lots of repetition!
+self.tools = [
+    {
+        "name": "read_file",
+        "description": "...",
+        "input_schema": {"type": "object", "properties": {...}, "required": [...]}
+    },
+    {
+        "name": "list_files",
+        "description": "...",
+        "input_schema": {"type": "object", "properties": {...}, "required": [...]}
+    },
+    {
+        "name": "write_file",
+        "description": "...",
+        "input_schema": {"type": "object", "properties": {...}, "required": [...]}
+    },
+]
+
+# Then update execute_tool with more if/elif...
+def execute_tool(self, name: str, tool_input: dict) -> str:
+    if name == "read_file":
+        return read_file(tool_input["path"])
+    elif name == "list_files":
+        return list_files(tool_input.get("path", "."))
+    elif name == "write_file":
+        return write_file(tool_input["path"], tool_input["content"])
+    return f"Unknown tool: {name}"
+```
+
+**Problems:**
+- Tool definition is separated from implementation
+- Schema is manually written as a dict (no type checking)
+- Need to update multiple places to add a tool
+- Easy to make mistakes with required fields
+
+### The Tool Registry Pattern
+
+The decorator system uses a central `TOOLS` dictionary to register all tools:
+
+```python
+TOOLS: dict[str, dict[str, Any]] = {}
+```
+
+Each tool entry stores:
+- `name`: The tool identifier
+- `description`: What it does
+- `model`: A Pydantic model class for input validation
+- `fn`: The actual Python function to call
+
+This centralizes all tool information in one place.
+
+### The @tool Decorator
+
+Python decorators are functions that wrap other functions. Our `@tool` decorator automatically registers a function as an LLM tool:
+
+```python
+@tool(
+    name="read_file",
+    description="Read the contents of a given relative file path.",
+    input_model=ReadFileInput,
+)
+def read_file(path: str) -> str:
+    return Path(path).read_text()
+```
+
+**What happens:**
+1. The `@tool` decorator runs when the module loads
+2. It adds an entry to the `TOOLS` registry
+3. The function itself remains unchanged and callable
+
+**Benefits:**
+- Tool metadata lives right above the implementation
+- No need to separately maintain a tools list
+- Adding a new tool is just adding a decorated function
+
+### Pydantic Input Validation
+
+Instead of manually writing JSON schemas, we use Pydantic models:
+
+```python
+from pydantic import BaseModel, Field
+
+class ReadFileInput(BaseModel):
+    path: str = Field(description="The relative path of a file to read")
+
+class ListFilesInput(BaseModel):
+    path: str = Field(
+        default=".",
+        description="The relative path of a directory to list"
+    )
+```
+
+**Advantages:**
+- Type-safe: `path: str` ensures it's a string
+- Auto-generated JSON schema via `model_json_schema()`
+- Default values: `default="."` makes the field optional
+- Automatic validation: Pydantic checks types before calling the function
+- Better IDE support: autocomplete and type checking
+
+### The anthropic_tools() Converter
+
+This function converts our registry to Anthropic's expected format:
+
+```python
+def anthropic_tools() -> list[dict[str, Any]]:
+    """Convert registered tools to Anthropic's tool format."""
+    out: list[dict[str, Any]] = []
+    for t in TOOLS.values():
+        schema = t["model"].model_json_schema()
+
+        out.append({
+            "name": t["name"],
+            "description": t["description"],
+            "input_schema": {
+                "type": "object",
+                "properties": schema.get("properties", {}),
+                "required": schema.get("required", []),
+            },
+        })
+    return out
+```
+
+**Key points:**
+- Loops through all registered tools
+- Extracts JSON schema from Pydantic models
+- Formats it for Anthropic's API
+- Called once in `Agent.__init__()`: `self.tools = anthropic_tools()`
+
+### The execute_tool() Function
+
+Instead of a long if/elif chain, we have a generic dispatcher:
+
+```python
+def execute_tool(name: str, tool_input: dict[str, Any]) -> str:
+    """Execute a tool with automatic input validation."""
+    t = TOOLS.get(name)
+    if not t:
+        return f"Unknown tool: {name}"
+
+    try:
+        # Validate input using Pydantic
+        parsed = t["model"].model_validate(tool_input)
+    except ValidationError as e:
+        return f"Invalid input for {name}: {e.errors()}"
+
+    # Convert validated model to kwargs and call function
+    kwargs = parsed.model_dump()
+    return t["fn"](**kwargs)
+```
+
+**How it works:**
+1. Look up the tool in the registry
+2. Validate the input against the Pydantic model
+3. If validation fails, return a helpful error message
+4. Convert the validated model to a dict
+5. Call the actual function with `**kwargs`
+
+**Benefits:**
+- No if/elif chain needed
+- Automatic input validation
+- Type-safe function calls
+- Consistent error handling
+
+### Side-by-Side Comparison
+
+**Manual Approach:**
+```python
+# Define schema manually
+self.tools = [{
+    "name": "read_file",
+    "description": "...",
+    "input_schema": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "..."}},
+        "required": ["path"]
+    }
+}]
+
+# Separate dispatcher
+def execute_tool(self, name: str, tool_input: dict) -> str:
+    if name == "read_file":
+        return read_file(tool_input["path"])
+    return f"Unknown tool: {name}"
+
+# Function definition elsewhere
+def read_file(path: str) -> str:
+    return Path(path).read_text()
+```
+
+**Decorator Approach:**
+```python
+# Everything together, type-safe
+class ReadFileInput(BaseModel):
+    path: str = Field(description="...")
+
+@tool(name="read_file", description="...", input_model=ReadFileInput)
+def read_file(path: str) -> str:
+    return Path(path).read_text()
+
+# Automatic registration, no dispatcher needed
+self.tools = anthropic_tools()
+```
+
+### Benefits Summary
+
+1. **DRY (Don't Repeat Yourself)**: Write tool definitions once, in one place
+2. **Type Safety**: Pydantic validates inputs before they reach your functions
+3. **Easier to Add Tools**: Just add a decorated function - no other changes needed
+4. **Better Errors**: Pydantic provides detailed validation error messages
+5. **IDE Support**: Type hints work properly with Pydantic models
+6. **Maintainable**: All tool metadata lives next to the implementation
+7. **Scalable**: Adding the 10th tool is as easy as adding the 2nd
+
+### When to Use This Pattern
+
+- **3+ tools**: Manual approach is fine for 1-2 tools, but use decorators beyond that
+- **Complex inputs**: When tools have multiple parameters or optional fields
+- **Team projects**: When multiple developers are adding tools
+- **Long-lived projects**: When you'll be maintaining and extending the code
+
+The decorator system is **already implemented** in the complete `agent_03_list_files.py` file. You can examine the code in lines 22-117 to see how it all fits together. When you're ready to add a new tool, just define a Pydantic model and add a decorated function!
+
+---
+
 ## Implementation Outline
 
 ### Step 1: Add the List Files Tool Definition
