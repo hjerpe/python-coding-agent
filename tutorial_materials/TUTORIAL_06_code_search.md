@@ -190,7 +190,7 @@ def code_search(
 Run the agent:
 
 ```bash
-python agent_06_search_exercise.py --verbose
+uv run python agent_06_search_exercise.py --verbose
 ```
 
 **Test cases demonstrating all 5 tools:**
@@ -314,7 +314,7 @@ After implementing, test your complete coding agent:
 
 8. **Verbose mode**:
    ```bash
-   python agents/agent_06_search.py --verbose
+   uv run python agents/agent_06_search.py --verbose
    ```
    Then: Run searches and observe the ripgrep commands.
 

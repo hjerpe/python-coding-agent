@@ -1,5 +1,3 @@
-> **Work in Progress**: This tutorial is actively being developed.
-
 > **Note**: This is a Python implementation of [How to Build a Coding Agent](https://github.com/ghuntley/how-to-build-a-coding-agent), originally created in Go by [Geoffrey Huntley](https://github.com/ghuntley).
 
 # How to Build a Python Coding Agent
@@ -21,7 +19,7 @@ uv pip install -r requirements.txt
 export ANTHROPIC_API_KEY="your-api-key-here"
 
 # 4. Run the final agent
-python agents/agent_06_search.py
+uv run python agents/agent_06_search.py
 ```
 
 ## Tutorial Structure
@@ -96,7 +94,7 @@ Each section includes:
 After completing all sections:
 
 ```bash
-python agents/agent_06_search.py
+uv run python agents/agent_06_search.py
 ```
 
 Try these prompts:
