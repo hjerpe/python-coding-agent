@@ -69,894 +69,200 @@ return output
 
 ---
 
-## Implementation Outline
+## Architecture Note: Decorator Pattern
 
-### Step 1: Add the Code Search Tool Definition
+This is the final tutorial in the series, and it uses the same decorator-based architecture as Sections 3-5. All infrastructure is pre-written in the exercise file - you only implement the `code_search()` function body.
 
-Define the tool with optional parameters:
+If you've completed the previous exercises, you're now familiar with this pattern:
+1. Pydantic model defines inputs
+2. `@tool` decorator registers the function
+3. Implementation focuses on core logic only
 
-```python
-{
-    "name": "code_search",
-    "description": "Search for code patterns using ripgrep (rg). Returns matching lines with file names and line numbers.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "The search pattern or regex"
-            },
-            "path": {
-                "type": "string",
-                "description": "Optional path to search in. Defaults to current directory."
-            },
-            "file_type": {
-                "type": "string",
-                "description": "Optional file type filter (e.g., 'py', 'js', 'go')"
-            },
-            "case_sensitive": {
-                "type": "boolean",
-                "description": "Whether search is case-sensitive. Defaults to false."
-            }
-        },
-        "required": ["pattern"]
-    }
-}
-```
-
-### Step 2: Build the Command Arguments
-
-Create a function that builds ripgrep arguments:
-
-```python
-def code_search(pattern: str, path: str = ".", file_type: str = None, case_sensitive: bool = False) -> str:
-    args = ["rg", "--line-number", "--with-filename", "--color=never"]
-
-    if not case_sensitive:
-        args.append("--ignore-case")
-
-    if file_type:
-        args.extend(["--type", file_type])
-
-    args.append(pattern)
-    args.append(path)
-```
-
-**Why these flags**:
-- `--line-number`: Show line numbers for each match
-- `--with-filename`: Always show filename (even for single file)
-- `--color=never`: Plain output (no ANSI codes)
-- `--ignore-case`: Case-insensitive by default (friendlier)
-
-### Step 3: Execute and Handle Exit Codes
-
-Run the command and handle ripgrep's exit codes:
-
-```python
-result = subprocess.run(args, capture_output=True, text=True)
-
-# Exit code 1 means no matches (not an error)
-if result.returncode == 1:
-    return "No matches found"
-
-# Other non-zero codes are real errors
-if result.returncode != 0:
-    return f"Search error: {result.stderr}"
-
-output = result.stdout.strip()
-```
-
-**Pitfall**: Don't treat exit code 1 as an error!
-
-### Step 4: Implement Output Limiting
-
-Prevent overwhelming Claude with too many matches:
-
-```python
-MAX_MATCHES = 50
-
-if output:
-    lines = output.split("\n")
-    if len(lines) > MAX_MATCHES:
-        truncated = lines[:MAX_MATCHES]
-        return "\n".join(truncated) + f"\n\n... (showing first {MAX_MATCHES} of {len(lines)} matches)"
-
-return output if output else "No matches found"
-```
-
-### Step 5: Update the Tool Dispatcher
-
-Add the code_search case:
-
-```python
-elif name == "code_search":
-    return code_search(
-        tool_input["pattern"],
-        tool_input.get("path", "."),
-        tool_input.get("file_type"),
-        tool_input.get("case_sensitive", False),
-    )
-```
+For a complete explanation of this architecture, see TUTORIAL_03_list_files.md (line 92+) or TUTORIAL_04_bash.md.
 
 ---
 
-## Complete Solution
+## What You'll Do
 
-Save this as `agents/agent_06_search.py`:
+In this final exercise, you'll implement the `code_search()` tool using ripgrep:
+
+1. **Build ripgrep commands** with dynamic arguments (case sensitivity, file types)
+2. **Parse ripgrep output** and handle exit codes
+3. **Limit results** to prevent overwhelming responses
+4. **Test your complete coding agent** with all 5 tools working together
+
+**Note:** All decorator infrastructure is pre-written. You only implement the TODO'd function body.
+
+---
+
+## Exercise Instructions
+
+### Step 1: Review the Complete Architecture
+
+Open `agent_06_search_exercise.py` and observe the full structure:
+
+1. **Tool Registry System** (lines 26-93): Decorator infrastructure
+2. **Pydantic Models** (lines 96-139): Five models including `CodeSearchInput` with all fields
+3. **Completed Tools** (lines 144-246): `read_file`, `list_files`, `bash`, and `edit_file` all working
+4. **TODO Tool** (lines 249-292): The `code_search()` function needs implementation
+
+The function already has its decorator:
 
 ```python
-#!/usr/bin/env python3
-"""
-Code Search Agent - Section 6
-
-A complete coding agent with file operations, bash commands, editing, and code search.
-"""
-
-import argparse
-import json
-import os
-import subprocess
-from pathlib import Path
-
-import anthropic
-
-
-def read_file(path: str) -> str:
-    """
-    Read and return the contents of a file.
-
-    Args:
-        path: The path to the file to read
-
-    Returns:
-        The file contents or an error message
-    """
-    try:
-        return Path(path).read_text()
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-
-def list_files(path: str = ".") -> str:
-    """
-    List all files and directories at the given path recursively.
-
-    Args:
-        path: The directory path to list (defaults to current directory)
-
-    Returns:
-        JSON array of file and directory paths
-    """
-    try:
-        entries = []
-        for root, dirs, files in os.walk(path):
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
-
-            for name in dirs:
-                rel_path = os.path.relpath(os.path.join(root, name), path)
-                entries.append(rel_path + "/")
-
-            for name in files:
-                if name.startswith("."):
-                    continue
-                rel_path = os.path.relpath(os.path.join(root, name), path)
-                entries.append(rel_path)
-
-        return json.dumps(sorted(entries), indent=2)
-    except Exception as e:
-        return f"Error listing files: {e}"
-
-
-def bash(command: str) -> str:
-    """
-    Execute a bash command and return the output.
-
-    Args:
-        command: The bash command to execute
-
-    Returns:
-        The command output or an error message
-    """
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-        )
-
-        output = result.stdout + result.stderr
-
-        if result.returncode != 0:
-            return f"Command failed (exit {result.returncode}):\n{output}"
-
-        return output.strip() if output else "(no output)"
-    except Exception as e:
-        return f"Error executing command: {e}"
-
-
-def edit_file(path: str, old_str: str, new_str: str) -> str:
-    """
-    Edit a file by replacing old_str with new_str.
-
-    Args:
-        path: The path to the file to edit
-        old_str: The text to replace (must match exactly once, empty for new file)
-        new_str: The replacement text
-
-    Returns:
-        Success message or error description
-    """
-    if not path:
-        return "Error: path cannot be empty"
-
-    if old_str == new_str:
-        return "Error: old_str and new_str cannot be identical"
-
-    file_path = Path(path)
-
-    if old_str == "":
-        try:
-            if not file_path.exists():
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_text(new_str)
-                return f"Created new file: {path}"
-            else:
-                existing = file_path.read_text()
-                file_path.write_text(existing + new_str)
-                return f"Appended to file: {path}"
-        except Exception as e:
-            return f"Error creating/appending file: {e}"
-
-    try:
-        content = file_path.read_text()
-    except FileNotFoundError:
-        return f"Error: file not found: {path}"
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-    count = content.count(old_str)
-    if count == 0:
-        preview = old_str[:50] + "..." if len(old_str) > 50 else old_str
-        return f"Error: '{preview}' not found in {path}"
-    if count > 1:
-        preview = old_str[:50] + "..." if len(old_str) > 50 else old_str
-        return f"Error: '{preview}' found {count} times, need exactly 1 match. Include more context to make it unique."
-
-    new_content = content.replace(old_str, new_str, 1)
-
-    try:
-        file_path.write_text(new_content)
-        return f"Successfully edited {path}"
-    except Exception as e:
-        return f"Error writing file: {e}"
-
-
+@tool(
+    name="code_search",
+    description="Search for code patterns using ripgrep...",
+    input_model=CodeSearchInput,
+)
 def code_search(
     pattern: str,
     path: str = ".",
     file_type: str | None = None,
     case_sensitive: bool = False,
 ) -> str:
-    """
-    Search for code patterns using ripgrep.
-
-    Args:
-        pattern: The search pattern or regex
-        path: The path to search in (defaults to current directory)
-        file_type: Optional file type filter (e.g., 'py', 'js')
-        case_sensitive: Whether search is case-sensitive (default False)
-
-    Returns:
-        Matching lines with file names and line numbers, or error message
-    """
-    MAX_MATCHES = 50
-
-    if not pattern:
-        return "Error: pattern cannot be empty"
-
-    # Build ripgrep command
-    args = ["rg", "--line-number", "--with-filename", "--color=never"]
-
-    if not case_sensitive:
-        args.append("--ignore-case")
-
-    if file_type:
-        args.extend(["--type", file_type])
-
-    args.append(pattern)
-    args.append(path)
-
-    try:
-        result = subprocess.run(args, capture_output=True, text=True)
-
-        # Exit code 1 means no matches (not an error)
-        if result.returncode == 1:
-            return "No matches found"
-
-        # Other non-zero codes are real errors
-        if result.returncode != 0:
-            return f"Search error: {result.stderr}"
-
-        output = result.stdout.strip()
-
-        if not output:
-            return "No matches found"
-
-        # Limit output to prevent overwhelming responses
-        lines = output.split("\n")
-        if len(lines) > MAX_MATCHES:
-            truncated = lines[:MAX_MATCHES]
-            return (
-                "\n".join(truncated)
-                + f"\n\n... (showing first {MAX_MATCHES} of {len(lines)} matches)"
-            )
-
-        return output
-
-    except FileNotFoundError:
-        return "Error: ripgrep (rg) is not installed. Install it with: brew install ripgrep (macOS) or apt install ripgrep (Ubuntu)"
-    except Exception as e:
-        return f"Error running search: {e}"
-
-
-class Agent:
-    """A complete coding agent with all tools."""
-
-    def __init__(self, verbose: bool = False):
-        """
-        Initialize the agent.
-
-        Args:
-            verbose: If True, print debug information
-        """
-        self.client = anthropic.Anthropic()
-        self.verbose = verbose
-        self.tools = [
-            {
-                "name": "read_file",
-                "description": "Read the contents of a given relative file path. Use this when you need to examine the contents of an existing file.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The relative path of a file to read",
-                        }
-                    },
-                    "required": ["path"],
-                },
-            },
-            {
-                "name": "list_files",
-                "description": "List files and directories at a given path. If no path is provided, lists files in the current directory. Returns a JSON array of file and directory names (directories end with /).",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Optional relative path to list. Defaults to current directory if not provided.",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-            {
-                "name": "bash",
-                "description": "Execute a bash command and return its output. Use this for running shell commands, scripts, or system utilities.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The bash command to execute",
-                        }
-                    },
-                    "required": ["command"],
-                },
-            },
-            {
-                "name": "edit_file",
-                "description": "Make edits to a text file by replacing 'old_str' with 'new_str'. The old_str must match exactly once in the file. For creating new files or appending, use an empty old_str.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The path to the file to edit",
-                        },
-                        "old_str": {
-                            "type": "string",
-                            "description": "The text to search for and replace (must match exactly once). Use empty string to create new file or append.",
-                        },
-                        "new_str": {
-                            "type": "string",
-                            "description": "The text to replace old_str with",
-                        },
-                    },
-                    "required": ["path", "old_str", "new_str"],
-                },
-            },
-            {
-                "name": "code_search",
-                "description": "Search for code patterns using ripgrep (rg). Returns matching lines with file names and line numbers. Supports regex patterns.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "The search pattern or regex to find in files",
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Optional path to search in. Defaults to current directory.",
-                        },
-                        "file_type": {
-                            "type": "string",
-                            "description": "Optional file type filter (e.g., 'py', 'js', 'go', 'ts')",
-                        },
-                        "case_sensitive": {
-                            "type": "boolean",
-                            "description": "Whether the search should be case-sensitive. Defaults to false.",
-                        },
-                    },
-                    "required": ["pattern"],
-                },
-            },
-        ]
-
-    def execute_tool(self, name: str, tool_input: dict) -> str:
-        """
-        Execute a tool and return its result.
-
-        Args:
-            name: The name of the tool to execute
-            tool_input: The input parameters for the tool
-
-        Returns:
-            The tool's output as a string
-        """
-        if name == "read_file":
-            return read_file(tool_input["path"])
-        elif name == "list_files":
-            path = tool_input.get("path", ".")
-            return list_files(path)
-        elif name == "bash":
-            command = tool_input["command"]
-            if self.verbose:
-                print(f"[DEBUG] Executing command: {command}")
-            return bash(command)
-        elif name == "edit_file":
-            return edit_file(
-                tool_input["path"],
-                tool_input["old_str"],
-                tool_input["new_str"],
-            )
-        elif name == "code_search":
-            return code_search(
-                tool_input["pattern"],
-                tool_input.get("path", "."),
-                tool_input.get("file_type"),
-                tool_input.get("case_sensitive", False),
-            )
-        return f"Unknown tool: {name}"
-
-    def run(self) -> None:
-        """Run the main conversation loop."""
-        conversation: list[dict] = []
-
-        print("Chat with Claude - Coding Agent (Ctrl+C to exit)")
-        print("-" * 50)
-
-        try:
-            while True:
-                # Get user input
-                user_input = input("\nYou: ").strip()
-                if not user_input:
-                    continue
-
-                # Add user message to conversation
-                conversation.append({"role": "user", "content": user_input})
-
-                # Inner loop for tool execution
-                while True:
-                    if self.verbose:
-                        print(f"[DEBUG] Sending {len(conversation)} messages")
-
-                    # Call the API with tools
-                    response = self.client.messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=1024,
-                        messages=conversation,
-                        tools=self.tools,
-                    )
-
-                    if self.verbose:
-                        print(f"[DEBUG] Response stop_reason: {response.stop_reason}")
-
-                    # Add assistant response to conversation
-                    conversation.append(
-                        {"role": "assistant", "content": response.content}
-                    )
-
-                    # Check for tool use
-                    tool_uses = [b for b in response.content if b.type == "tool_use"]
-
-                    if not tool_uses:
-                        # No tools, print text and break to next user input
-                        for block in response.content:
-                            if hasattr(block, "text"):
-                                print(f"\nAssistant: {block.text}")
-                        break
-
-                    # Execute tools and collect results
-                    tool_results = []
-                    for tool_use in tool_uses:
-                        if self.verbose:
-                            print(f"[DEBUG] Tool call: {tool_use.name}")
-                            print(f"[DEBUG] Tool input: {tool_use.input}")
-
-                        result = self.execute_tool(tool_use.name, tool_use.input)
-
-                        if self.verbose:
-                            result_preview = (
-                                result[:100] + "..."
-                                if len(result) > 100
-                                else result
-                            )
-                            print(f"[DEBUG] Tool result: {result_preview}")
-
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use.id,
-                                "content": result,
-                            }
-                        )
-
-                    # Add tool results to conversation
-                    conversation.append({"role": "user", "content": tool_results})
-
-        except KeyboardInterrupt:
-            print("\n\nGoodbye!")
-
-
-def main():
-    """Entry point for the coding agent."""
-    parser = argparse.ArgumentParser(
-        description="Complete coding agent with Claude"
-    )
-    parser.add_argument(
-        "--verbose", action="store_true", help="Enable verbose debug output"
-    )
-    args = parser.parse_args()
-
-    agent = Agent(verbose=args.verbose)
-    agent.run()
-
-
-if __name__ == "__main__":
-    main()
-```
-
----
-
-## Exercise File
-
-Save this as `agents/agent_06_search_exercise.py` and implement the TODOs:
-
-```python
-#!/usr/bin/env python3
-"""
-Code Search Agent - Section 6 (Exercise)
-
-Implement the TODOs to create a complete coding agent with search.
-"""
-
-import argparse
-import json
-import os
-import subprocess
-from pathlib import Path
-
-import anthropic
-
-
-def read_file(path: str) -> str:
-    """Read and return the contents of a file."""
-    try:
-        return Path(path).read_text()
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-
-def list_files(path: str = ".") -> str:
-    """List all files and directories at the given path recursively."""
-    try:
-        entries = []
-        for root, dirs, files in os.walk(path):
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
-            for name in dirs:
-                rel_path = os.path.relpath(os.path.join(root, name), path)
-                entries.append(rel_path + "/")
-            for name in files:
-                if name.startswith("."):
-                    continue
-                rel_path = os.path.relpath(os.path.join(root, name), path)
-                entries.append(rel_path)
-        return json.dumps(sorted(entries), indent=2)
-    except Exception as e:
-        return f"Error listing files: {e}"
-
-
-def bash(command: str) -> str:
-    """Execute a bash command and return the output."""
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        output = result.stdout + result.stderr
-        if result.returncode != 0:
-            return f"Command failed (exit {result.returncode}):\n{output}"
-        return output.strip() if output else "(no output)"
-    except Exception as e:
-        return f"Error executing command: {e}"
-
-
-def edit_file(path: str, old_str: str, new_str: str) -> str:
-    """Edit a file by replacing old_str with new_str."""
-    if not path:
-        return "Error: path cannot be empty"
-    if old_str == new_str:
-        return "Error: old_str and new_str cannot be identical"
-
-    file_path = Path(path)
-
-    if old_str == "":
-        try:
-            if not file_path.exists():
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_text(new_str)
-                return f"Created new file: {path}"
-            else:
-                existing = file_path.read_text()
-                file_path.write_text(existing + new_str)
-                return f"Appended to file: {path}"
-        except Exception as e:
-            return f"Error: {e}"
-
-    try:
-        content = file_path.read_text()
-    except FileNotFoundError:
-        return f"Error: file not found: {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-    count = content.count(old_str)
-    if count == 0:
-        return f"Error: text not found in {path}"
-    if count > 1:
-        return f"Error: text found {count} times, need exactly 1 match"
-
-    new_content = content.replace(old_str, new_str, 1)
-    try:
-        file_path.write_text(new_content)
-        return f"Successfully edited {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def code_search(
-    pattern: str,
-    path: str = ".",
-    file_type: str | None = None,
-    case_sensitive: bool = False,
-) -> str:
-    """
-    Search for code patterns using ripgrep.
-
-    Args:
-        pattern: The search pattern or regex
-        path: The path to search in (defaults to current directory)
-        file_type: Optional file type filter (e.g., 'py', 'js')
-        case_sensitive: Whether search is case-sensitive (default False)
-
-    Returns:
-        Matching lines with file names and line numbers, or error message
-    """
-    # TODO: Implement code search using ripgrep
-    # Steps:
-    # 1. Validate pattern is not empty
-    # 2. Build command args: ["rg", "--line-number", "--with-filename", "--color=never"]
-    # 3. Add "--ignore-case" if not case_sensitive
-    # 4. Add ["--type", file_type] if file_type is provided
-    # 5. Append pattern and path to args
-    # 6. Run subprocess.run(args, capture_output=True, text=True)
-    # 7. Handle exit codes:
-    #    - returncode == 1: return "No matches found"
-    #    - returncode != 0: return error message
-    # 8. Limit output to MAX_MATCHES (50) lines
-    #
-    # Hints:
-    # - args.extend(["--type", file_type])
-    # - lines = output.split("\n")
-    # - Handle FileNotFoundError for missing ripgrep
+    # TODO: Your implementation here
     pass
-
-
-class Agent:
-    """A complete coding agent with all tools."""
-
-    def __init__(self, verbose: bool = False):
-        """
-        Initialize the agent.
-
-        Args:
-            verbose: If True, print debug information
-        """
-        self.client = anthropic.Anthropic()
-        self.verbose = verbose
-
-        # TODO: Add the code_search tool to this list
-        # It should have:
-        # - name: "code_search"
-        # - description: explain ripgrep search
-        # - input_schema with:
-        #   - "pattern" (required)
-        #   - "path" (optional)
-        #   - "file_type" (optional)
-        #   - "case_sensitive" (optional, boolean)
-        self.tools = [
-            {
-                "name": "read_file",
-                "description": "Read the contents of a given relative file path.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The relative path of a file to read",
-                        }
-                    },
-                    "required": ["path"],
-                },
-            },
-            {
-                "name": "list_files",
-                "description": "List files and directories at a given path.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Optional path to list.",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-            {
-                "name": "bash",
-                "description": "Execute a bash command and return its output.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The bash command to execute",
-                        }
-                    },
-                    "required": ["command"],
-                },
-            },
-            {
-                "name": "edit_file",
-                "description": "Edit a file by replacing old_str with new_str.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "File path"},
-                        "old_str": {"type": "string", "description": "Text to replace"},
-                        "new_str": {"type": "string", "description": "Replacement text"},
-                    },
-                    "required": ["path", "old_str", "new_str"],
-                },
-            },
-            # TODO: Add code_search tool definition here
-        ]
-
-    def execute_tool(self, name: str, tool_input: dict) -> str:
-        """Execute a tool and return its result."""
-        if name == "read_file":
-            return read_file(tool_input["path"])
-        elif name == "list_files":
-            return list_files(tool_input.get("path", "."))
-        elif name == "bash":
-            return bash(tool_input["command"])
-        elif name == "edit_file":
-            return edit_file(
-                tool_input["path"],
-                tool_input["old_str"],
-                tool_input["new_str"],
-            )
-        # TODO: Add handling for "code_search"
-        return f"Unknown tool: {name}"
-
-    def run(self) -> None:
-        """Run the main conversation loop."""
-        conversation: list[dict] = []
-
-        print("Chat with Claude - Coding Agent (Ctrl+C to exit)")
-        print("-" * 50)
-
-        try:
-            while True:
-                user_input = input("\nYou: ").strip()
-                if not user_input:
-                    continue
-
-                conversation.append({"role": "user", "content": user_input})
-
-                while True:
-                    if self.verbose:
-                        print(f"[DEBUG] Sending {len(conversation)} messages")
-
-                    response = self.client.messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=1024,
-                        messages=conversation,
-                        tools=self.tools,
-                    )
-
-                    if self.verbose:
-                        print(f"[DEBUG] Response stop_reason: {response.stop_reason}")
-
-                    conversation.append(
-                        {"role": "assistant", "content": response.content}
-                    )
-
-                    tool_uses = [b for b in response.content if b.type == "tool_use"]
-
-                    if not tool_uses:
-                        for block in response.content:
-                            if hasattr(block, "text"):
-                                print(f"\nAssistant: {block.text}")
-                        break
-
-                    tool_results = []
-                    for tool_use in tool_uses:
-                        if self.verbose:
-                            print(f"[DEBUG] Tool call: {tool_use.name}")
-                            print(f"[DEBUG] Tool input: {tool_use.input}")
-
-                        result = self.execute_tool(tool_use.name, tool_use.input)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use.id,
-                                "content": result,
-                            }
-                        )
-
-                    conversation.append({"role": "user", "content": tool_results})
-
-        except KeyboardInterrupt:
-            print("\n\nGoodbye!")
-
-
-def main():
-    """Entry point for the coding agent."""
-    parser = argparse.ArgumentParser(description="Complete coding agent with Claude")
-    parser.add_argument(
-        "--verbose", action="store_true", help="Enable verbose debug output"
-    )
-    args = parser.parse_args()
-
-    agent = Agent(verbose=args.verbose)
-    agent.run()
-
-
-if __name__ == "__main__":
-    main()
 ```
+
+### Step 2: Implement code_search()
+
+**Signature:**
+```python
+def code_search(
+    pattern: str,
+    path: str = ".",
+    file_type: str | None = None,
+    case_sensitive: bool = False
+) -> str:
+```
+
+**Requirements:**
+
+1. **Input Validation:**
+   - If `pattern` is empty, return `"Error: pattern cannot be empty"`
+
+2. **Build ripgrep command:**
+   ```python
+   args = ["rg", "--line-number", "--with-filename", "--color=never"]
+
+   if not case_sensitive:
+       args.append("--ignore-case")
+
+   if file_type:
+       args.extend(["--type", file_type])
+
+   args.append(pattern)
+   args.append(path)
+   ```
+
+3. **Execute and handle results:**
+   ```python
+   result = subprocess.run(args, capture_output=True, text=True)
+
+   # Exit code 1 means no matches (not an error)
+   if result.returncode == 1:
+       return "No matches found"
+
+   # Other non-zero codes are errors
+   if result.returncode != 0:
+       return f"Search error: {result.stderr}"
+   ```
+
+4. **Limit output:**
+   ```python
+   output = result.stdout.strip()
+   MAX_MATCHES = 50
+   lines = output.split("\n")
+
+   if len(lines) > MAX_MATCHES:
+       truncated = lines[:MAX_MATCHES]
+       return "\n".join(truncated) + f"\n\n... (showing first {MAX_MATCHES} of {len(lines)} matches)"
+   ```
+
+5. **Handle missing ripgrep:**
+   ```python
+   except FileNotFoundError:
+       return "Error: ripgrep (rg) is not installed. Install it with: brew install ripgrep"
+   ```
+
+### Step 3: Test Your Complete Agent
+
+Run the agent:
+
+```bash
+python agent_06_search_exercise.py --verbose
+```
+
+**Test cases demonstrating all 5 tools:**
+
+1. **Search for pattern:**
+   ```
+   You: Search for the word "Agent" in Python files
+   Expected: Shows matches with line numbers
+   ```
+
+2. **Read file from search results:**
+   ```
+   You: Read the file agent_03_list_files.py
+   Expected: Shows full file content
+   ```
+
+3. **Edit code based on search:**
+   ```
+   You: In test_file.py, replace "old_function" with "new_function"
+   Expected: Performs edit
+   ```
+
+4. **Verify with bash:**
+   ```
+   You: Run "git diff test_file.py" to see the changes
+   Expected: Shows git diff output
+   ```
+
+5. **List directory structure:**
+   ```
+   You: List all files in the tutorial_materials directory
+   Expected: Shows directory tree
+   ```
+
+### Step 4: Reflect on the Architecture
+
+You've now built a complete coding agent with 5 tools:
+- `read_file`
+- `list_files`
+- `bash`
+- `edit_file`
+- `code_search`
+
+Thanks to the decorator pattern:
+- Each tool required only **one function** + **one Pydantic model**
+- No manual tool registration
+- No execute_tool() if/elif chains
+- Automatic input validation
+
+Compare this to what it would look like with manual registration - you'd have:
+- 5 tool definitions in `self.tools` list (~100 lines of JSON schema)
+- 5 branches in `execute_tool()` if/elif chain (~25 lines)
+- Manual input validation in each branch (~50 lines)
+- Total: ~175 lines of boilerplate
+
+With decorators: **0 lines of boilerplate**. All infrastructure is reusable.
+
+### Next Steps
+
+You now have all the foundational skills to build powerful AI agents:
+
+1. **Tool-based architectures:** Giving LLMs structured capabilities
+2. **Agentic loops:** Iterating until task completion
+3. **State management:** Maintaining conversation context
+4. **Error handling:** Graceful failures and recovery
+5. **Scalable patterns:** Decorator-based tool registration
+
+**Extensions to try:**
+- Add more tools (git operations, API calls, data processing)
+- Implement tool chaining (output of one tool → input of another)
+- Add conversation memory/summarization for long sessions
+- Build specialized agents (code reviewer, test generator, doc writer)
 
 ---
 

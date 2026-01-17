@@ -7,13 +7,143 @@ A chat agent that can read files, list directories, and execute bash commands.
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Any, Callable
+
+from pydantic import BaseModel, Field, ValidationError
 
 import anthropic
 
+logger = logging.getLogger(__name__)
 
+
+# ---------- Tool Registry System ----------
+#
+# This section implements a scalable tool registration system using decorators
+# and Pydantic for input validation. This approach:
+# - Reduces boilerplate when adding new tools
+# - Provides automatic input validation
+# - Centralizes tool definitions
+# - Makes the codebase more maintainable
+
+TOOLS: dict[str, dict[str, Any]] = {}
+
+
+def tool(*, name: str, description: str, input_model: type[BaseModel]):
+    """
+    Decorator to register a function as an LLM tool.
+
+    The wrapped function should accept keyword arguments that match the fields
+    in `input_model`. Example:
+
+        class MyInput(BaseModel):
+            a: int
+            b: str = "default"
+
+        @tool(name="my_tool", description="...", input_model=MyInput)
+        def my_tool(a: int, b: str = "default") -> str:
+            return f"a={a}, b={b}"
+
+    Args:
+        name: The tool name that the LLM will use
+        description: Description of what the tool does
+        input_model: Pydantic model class for validating inputs
+
+    Returns:
+        Decorated function
+    """
+    def deco(fn: Callable[..., str]):
+        TOOLS[name] = {
+            "name": name,
+            "description": description,
+            "model": input_model,
+            "fn": fn,
+        }
+        return fn
+    return deco
+
+
+def anthropic_tools() -> list[dict[str, Any]]:
+    """
+    Convert registered tools to Anthropic's tool format.
+
+    Returns:
+        List of tool definitions in Anthropic's expected format:
+        [{"name": ..., "description": ..., "input_schema": {...}}, ...]
+    """
+    out: list[dict[str, Any]] = []
+    for t in TOOLS.values():
+        schema = t["model"].model_json_schema()
+        out.append({
+            "name": t["name"],
+            "description": t["description"],
+            "input_schema": {
+                "type": "object",
+                "properties": schema.get("properties", {}),
+                "required": schema.get("required", []),
+            }
+        })
+    return out
+
+
+def execute_tool(name: str, tool_input: dict) -> str:
+    """
+    Execute a registered tool with input validation.
+
+    Validates tool_input against the tool's Pydantic model,
+    then calls the underlying function with validated kwargs.
+
+    Args:
+        name: The name of the tool to execute
+        tool_input: Dictionary of input parameters
+
+    Returns:
+        The tool's output as a string, or an error message
+    """
+    t = TOOLS.get(name)
+    if not t:
+        return f"Unknown tool: {name}"
+    try:
+        parsed = t["model"].model_validate(tool_input)
+    except ValidationError as e:
+        return f"Invalid input for {name}: {e.errors()}"
+
+    # Convert validated model to dict and kwargs for the function
+    kwargs = parsed.model_dump()
+    return t["fn"](**kwargs)
+
+
+# ---------- Pydantic Input Models ----------
+
+class ReadFileInput(BaseModel):
+    """Input schema for the read_file tool."""
+    path: str = Field(description="The relative path of a file to read")
+
+
+class ListFilesInput(BaseModel):
+    """Input schema for the list_files tool."""
+    path: str = Field(
+        default=".",
+        description="The relative path of a directory to list (defaults to current directory)"
+    )
+
+
+class BashInput(BaseModel):
+    """Input schema for the bash tool."""
+    command: str = Field(description="The bash command to execute")
+
+
+# ---------- Tool Implementations ----------
+
+
+@tool(
+    name="read_file",
+    description="Read the contents of a given relative file path. Use this when you need to examine the contents of an existing file.",
+    input_model=ReadFileInput,
+)
 def read_file(path: str) -> str:
     """
     Read and return the contents of a file.
@@ -30,6 +160,11 @@ def read_file(path: str) -> str:
         return f"Error reading file: {e}"
 
 
+@tool(
+    name="list_files",
+    description="List files and directories at a given path. If no path is provided, lists files in the current directory. Returns a JSON array of file and directory names (directories end with /).",
+    input_model=ListFilesInput,
+)
 def list_files(path: str = ".") -> str:
     """
     List all files and directories at the given path recursively.
@@ -60,6 +195,11 @@ def list_files(path: str = ".") -> str:
         return f"Error listing files: {e}"
 
 
+@tool(
+    name="bash",
+    description="Execute a bash command and return its output. Use this for running shell commands, scripts, or system utilities.",
+    input_model=BashInput,
+)
 def bash(command: str) -> str:
     """
     Execute a bash command and return the output.
@@ -92,59 +232,11 @@ def bash(command: str) -> str:
 class Agent:
     """A chat agent that can read files, list directories, and run commands."""
 
-    def __init__(self, verbose: bool = False):
-        """
-        Initialize the agent.
-
-        Args:
-            verbose: If True, print debug information
-        """
+    def __init__(self):
+        """Initialize the agent with registered tools."""
         self.client = anthropic.Anthropic()
-        self.verbose = verbose
-        self.tools = [
-            {
-                "name": "read_file",
-                "description": "Read the contents of a given relative file path. Use this when you need to examine the contents of an existing file.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The relative path of a file to read",
-                        }
-                    },
-                    "required": ["path"],
-                },
-            },
-            {
-                "name": "list_files",
-                "description": "List files and directories at a given path. If no path is provided, lists files in the current directory. Returns a JSON array of file and directory names (directories end with /).",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Optional relative path to list. Defaults to current directory if not provided.",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-            {
-                "name": "bash",
-                "description": "Execute a bash command and return its output. Use this for running shell commands, scripts, or system utilities.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The bash command to execute",
-                        }
-                    },
-                    "required": ["command"],
-                },
-            },
-        ]
+        # Use the decorator-based tool registry
+        self.tools = anthropic_tools()
 
     def execute_tool(self, name: str, tool_input: dict) -> str:
         """
@@ -157,17 +249,9 @@ class Agent:
         Returns:
             The tool's output as a string
         """
-        if name == "read_file":
-            return read_file(tool_input["path"])
-        elif name == "list_files":
-            path = tool_input.get("path", ".")
-            return list_files(path)
-        elif name == "bash":
-            command = tool_input["command"]
-            if self.verbose:
-                print(f"[DEBUG] Executing command: {command}")
-            return bash(command)
-        return f"Unknown tool: {name}"
+        # Delegate to the module-level execute_tool function
+        # which handles validation and dispatching
+        return execute_tool(name, tool_input)
 
     def run(self) -> None:
         """Run the main conversation loop."""
@@ -188,8 +272,7 @@ class Agent:
 
                 # Inner loop for tool execution
                 while True:
-                    if self.verbose:
-                        print(f"[DEBUG] Sending {len(conversation)} messages")
+                    logger.debug(f"Sending {len(conversation)} messages")
 
                     # Call the API with tools
                     response = self.client.messages.create(
@@ -199,8 +282,7 @@ class Agent:
                         tools=self.tools,
                     )
 
-                    if self.verbose:
-                        print(f"[DEBUG] Response stop_reason: {response.stop_reason}")
+                    logger.debug(f"Response stop_reason: {response.stop_reason}")
 
                     # Add assistant response to conversation
                     conversation.append(
@@ -220,19 +302,17 @@ class Agent:
                     # Execute tools and collect results
                     tool_results = []
                     for tool_use in tool_uses:
-                        if self.verbose:
-                            print(f"[DEBUG] Tool call: {tool_use.name}")
-                            print(f"[DEBUG] Tool input: {tool_use.input}")
+                        logger.debug(f"Tool call: {tool_use.name}")
+                        logger.debug(f"Tool input: {tool_use.input}")
 
                         result = self.execute_tool(tool_use.name, tool_use.input)
 
-                        if self.verbose:
-                            result_preview = (
-                                result[:100] + "..."
-                                if len(result) > 100
-                                else result
-                            )
-                            print(f"[DEBUG] Tool result: {result_preview}")
+                        result_preview = (
+                            result[:100] + "..."
+                            if len(result) > 100
+                            else result
+                        )
+                        logger.debug(f"Tool result: {result_preview}")
 
                         tool_results.append(
                             {
@@ -259,7 +339,15 @@ def main():
     )
     args = parser.parse_args()
 
-    agent = Agent(verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="[%(levelname)s] %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("anthropic").setLevel(logging.WARNING)
+
+    agent = Agent()
     agent.run()
 
 

@@ -7,22 +7,19 @@ This is the foundation for more advanced agents.
 """
 
 import argparse
+import logging
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 
 class Agent:
     """A basic chat agent that maintains conversation history."""
 
-    def __init__(self, verbose: bool = False):
-        """
-        Initialize the agent.
-
-        Args:
-            verbose: If True, print debug information
-        """
+    def __init__(self):
+        """Initialize the agent."""
         self.client = anthropic.Anthropic()
-        self.verbose = verbose
 
     def run(self) -> None:
         """Run the main conversation loop."""
@@ -41,8 +38,7 @@ class Agent:
                 # Add user message to conversation
                 conversation.append({"role": "user", "content": user_input})
 
-                if self.verbose:
-                    print(f"[DEBUG] Sending {len(conversation)} messages")
+                logger.debug(f"Sending {len(conversation)} messages")
 
                 # Call the API
                 response = self.client.messages.create(
@@ -51,8 +47,7 @@ class Agent:
                     messages=conversation,
                 )
 
-                if self.verbose:
-                    print(f"[DEBUG] Response stop_reason: {response.stop_reason}")
+                logger.debug(f"Response stop_reason: {response.stop_reason}")
 
                 # Add assistant response to conversation
                 conversation.append({"role": "assistant", "content": response.content})
@@ -74,7 +69,15 @@ def main():
     )
     args = parser.parse_args()
 
-    agent = Agent(verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="[%(levelname)s] %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("anthropic").setLevel(logging.WARNING)
+
+    agent = Agent()
     agent.run()
 
 
