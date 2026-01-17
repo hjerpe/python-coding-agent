@@ -249,7 +249,7 @@ Run the agent:
 
 ```bash
 cd /path/to/agents
-python agent_04_bash_exercise.py --verbose
+uv run python agent_04_bash_exercise.py --verbose
 ```
 
 **Test cases:**
@@ -327,7 +327,7 @@ After implementing, test your agent:
 
 7. **Verbose mode**:
    ```bash
-   python agents/agent_04_bash.py --verbose
+   uv run python agents/agent_04_bash.py --verbose
    ```
    Then: "Run pwd"
    Expected: See debug output including the exact command being executed.

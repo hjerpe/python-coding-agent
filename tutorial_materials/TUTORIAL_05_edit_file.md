@@ -161,7 +161,7 @@ preview = old_str[:50] + "..." if len(old_str) > 50 else old_str
 Run the agent:
 
 ```bash
-python agent_05_edit_exercise.py --verbose
+uv run python agent_05_edit_exercise.py --verbose
 ```
 
 **Test cases:**
@@ -238,7 +238,7 @@ After implementing, test your agent:
 
 7. **Verbose mode**:
    ```bash
-   python agents/agent_05_edit.py --verbose
+   uv run python agents/agent_05_edit.py --verbose
    ```
    Then: Make an edit and observe the debug output.
 

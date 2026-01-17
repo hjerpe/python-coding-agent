@@ -225,7 +225,7 @@ After implementing, test your agent with these prompts:
 
 4. **Verbose mode**:
    ```bash
-   python agents/agent_01_chat.py --verbose
+   uv run python agents/agent_01_chat.py --verbose
    ```
    Expected: See debug output showing message counts and stop reasons.
 

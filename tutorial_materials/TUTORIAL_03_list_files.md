@@ -448,7 +448,7 @@ After implementing, test your agent:
 
 5. **Verbose mode**:
    ```bash
-   python agents/agent_03_list_files.py --verbose
+   uv run python agents/agent_03_list_files.py --verbose
    ```
    Then: "List all files"
    Expected: See debug output for both list_files and any subsequent tool calls.

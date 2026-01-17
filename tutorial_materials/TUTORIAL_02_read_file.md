@@ -238,7 +238,7 @@ After implementing, test your agent:
 
 5. **Verbose mode**:
    ```bash
-   python agents/agent_02_read.py --verbose
+   uv run python agents/agent_02_read.py --verbose
    ```
    Then: "Read test_files/fizzbuzz.js"
    Expected: See debug output showing tool calls and results.
