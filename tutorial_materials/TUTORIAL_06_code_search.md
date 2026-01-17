@@ -170,6 +170,7 @@ def code_search(
 
 4. **Limit output:**
    ```python
+   output = result.stdout.strip()
    MAX_MATCHES = 50
    lines = output.split("\n")
 

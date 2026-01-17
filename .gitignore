@@ -4,3 +4,4 @@ __pycache__/
 .env
 CLAUDE.md
 TUTORIAL_UPDATE_SPEC.md
+uv.lock
